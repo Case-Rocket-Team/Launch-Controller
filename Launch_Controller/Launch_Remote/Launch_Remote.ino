@@ -11,8 +11,8 @@
 #define LED_FIRE 8
 
 // Define Radio Pins
-#define RX 44//9 // Recieve
-#define TX 46//10 // Transmit
+#define RX 10 // Receiver
+#define TX 11 // Transmit
 
 // Setup Serial Radio
 SoftwareSerial HC12(TX, RX); // HC-12 TX Pin, HC-12 RX Pin
@@ -22,12 +22,11 @@ bool armed = false; // Armed State
 bool downlink = false; // Connection State
 int channel = 0; // Which channel is currently being used?
 int led_delay = 2000; // How long do the LEDs blink? (ms)
-int refresh_delay = 50; // How long between cycles? (ms)
-int reply_counter = 0; // Counter for waiting for reply
-int reply_delay = 2100; // How long to wait for a reply? (ms)
 int comm_delay = 100; // How long does the HC-12 delay between read/write commands (ms)
 int LCD_columns = 16;
 int LCD_rows = 2;
+int disconnect_counter = 0; // How many times has the controller not recieved data
+int max_disconnect = 200; // What is the number of loops it can not recieve before trying to reconnect.
 byte incomingByte; // HC-12 Incoming Byte
 byte outgoingByte; // HC-12 Outgoing Byte
 String command = ""; // Command to send to controller
@@ -71,15 +70,7 @@ void setup() {
 
   lcd.createChar(0, Connection);
 
-  // Enter Setup Mode
-  disp = "Setup Mode";
-  write_LCD();
-
-  //get_downlink();
-
-  // Display connection
-  disp = "Controller Connected";
-  write_LCD();
+  get_downlink();
 }
 
 void loop() {
@@ -116,25 +107,30 @@ void loop() {
     command = "";
   }
   
+  Serial.println(command);
   comm_remote(); // Send commands to and read replies from controller
-  reply_actions(reply); // Check what the reply action requires
 
-  disp = reply;
-  write_LCD(); // Set LCD display
+  Serial.println(disconnect_counter);
+
+  if (disconnect_counter >= max_disconnect){ // If the controller has not recieved data from remote in a while, attempt to reconnect.
+    downlink = false;
+    get_downlink();
+  }
+
+  Serial.println(reply);
+  reply_actions(); // Check what the reply action requires
 
   command = ""; // Reset command to empty
   reply = ""; // Reset reply to empty.
 
   write_LCD(); // Set LCD display
-  
-  delay(refresh_delay);
 }
 
-void reply_actions(String rply){
-  if (rply == "NCONT"){
+void reply_actions(){
+  if (reply == "NCONT"){
     disp = "Continutity not detected"; // Set display
   }
-  else if (rply == "CONT"){
+  else if (reply == "CONT"){
     // Flash LED to Confirm Continuity
     digitalWrite(LED_CONT,HIGH);
     delay(led_delay);
@@ -142,15 +138,15 @@ void reply_actions(String rply){
     
     disp = "Continutity detected"; // Set display
   }
-  else if (rply == "ARMD"){
+  else if (reply == "ARMD"){
     digitalWrite(LED_FIRE,HIGH);
     disp = "Armed"; // Set display
   }
-  else if (rply == "DARMD"){
+  else if (reply == "DARMD"){
     digitalWrite(LED_FIRE,LOW); // Turn off fire button LED
     disp = "Disarmed"; // Set display
   }
-  else if (rply == "FIRED"){
+  else if (reply == "FIRED"){
     // Flash LED to Confirm Fire
     digitalWrite(LED_FIRE,LOW);
     delay(led_delay);
@@ -165,53 +161,69 @@ void reply_actions(String rply){
 
 void recieve_data(){
   while (HC12.available()){ // If data available from Remote
-    incomingByte = HC12.read(); // Read command
-    reply += char(incomingByte); // Update command with incoming byte
+    incomingByte = HC12.read(); // Read reply
+    reply += char(incomingByte); // Update reply with incoming byte
   }
 
-  if (reply != ""){
-    Serial.println(reply); // Debug line
+  if (reply == ""){ // If no reply recieved
+    disconnect_counter++; // Increment reply counter
+  }
+  else{
+    disconnect_counter = 0; // Reset counter
   }
 }
 
 void send_data(){
   if (command != ""){ // If ready to send command
     HC12.print(command);
-    Serial.println(command); // Debug line
   }
 
   while (Serial.available()) { // If Serial Line is being used
     HC12.write(Serial.read()); // Send commands from Serial Line
-    Serial.println("test");
   }
 }
 
 void comm_remote(){
   recieve_data();
-  send_data();
+  delay(comm_delay); // Wait long enough for controller to recieve communciation
 
+  send_data();
   delay(comm_delay); // Wait long enough for controller to recieve communciation
 }
 
 void get_downlink(){
+  if (armed == true){
+    digitalWrite(LED_FIRE,LOW);
+  }
+
+  disp = "Connecting";
+  write_LCD();
   while (downlink == false){
     command = "HAND";
     comm_remote();
+    command = ""; // Reset command to empty.
     
     if (reply == "SHAKE"){
       downlink = true;
+      command = "CONF";
+      comm_remote();
     }
 
-    command = ""; // Reset command to empty.
     reply = ""; // Reset reply to empty
   }
 
+  if (armed == true){
+    digitalWrite(LED_FIRE,HIGH);
+  }
+
+  disconnect_counter = 0;
   Serial.println("Connected");
+  disp = "Connected";
+  write_LCD();
 }
 
 void write_LCD(){
   if (disp != ""){ // If ready to display text
-    Serial.println(disp); // Debug line 
     if (disp.length() <= LCD_columns){ // If the length of the display text is less than the size of the LCD display
       lcd.clear(); // Clear screen
       lcd.setCursor(0,0); // Set cursor to the end

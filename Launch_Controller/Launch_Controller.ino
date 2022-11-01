@@ -21,10 +21,6 @@
 SoftwareSerial HC12(TX, RX); // HC-12 TX Pin, HC-12 RX Pin
 
 // Define Variables
-int sensorValue = 0;
-float voltage = 0.00;
-const float threshold_volt = 0.75; // Threshold voltage for continutity check
-const int max_mess_length = 6; // Set maximum command message length
 bool armed = false; // Armed state set to false by default
 bool downlink = false; // Connection to Remote
 int buzzer_delay = 500; // How long is the buzzer allowed to run (ms)
@@ -33,6 +29,11 @@ int cont_delay = 50; // How long does the continuity check wait to allow current
 int comm_delay = 100; // How long does the HC-12 delay between read/write commands (ms)
 int check_pin = 0; // Which pin is being used to check e-match
 int fire_pin = 0; // Which pin is being used to fire e-match
+int sensorValue = 0;
+float voltage = 0.00;
+const float threshold_volt = 0.75; // Threshold voltage for continutity check
+int disconnect_counter = 0; // How many times has the controller not recieved data
+int max_disconnect = 300; // What is the number of loops it can not recieve before trying to reconnect.
 byte incomingByte; // HC-12 Incoming Byte
 String command = ""; // Remote command
 String reply = ""; // Response code for remote
@@ -56,16 +57,19 @@ void setup() {
   digitalWrite(RLY4, LOW);
   digitalWrite(CHK1, LOW);
   digitalWrite(CHK2, LOW);
-
-  //get_downlink(); // Establish connection with the Remote
 }
 
 void loop() {
   comm_controller();
-  command_actions(command); // Check what the command action requires
+  Serial.println(command);
+  Serial.println(disconnect_counter);
+
+  reply = ""; // Reset reply to empty
+
+  command_actions(); // Check what the command action requires
+  Serial.println(reply);
   
   command = ""; // Reset command to empty.
-  reply = ""; // Reset reply to empty
 }
 
 void get_voltage(){
@@ -124,22 +128,37 @@ void fire_rocket(String cmnd){
   }
 }
 
-void command_actions(String cmnd){
-  if (cmnd == "CONT1" || cmnd == "CONT2"){ // Continuity Check Command
-    check_cont(cmnd);
+void command_actions(){
+  if (command == "HAND" || disconnect_counter >= max_disconnect){
+    downlink = false;
+    reply = "SHAKE";
+    if (armed == true){
+      digitalWrite(RLY3, LOW); // Turn off Arming Relay
+    }
   }
-  else if (cmnd == "ARM"){ // Arming Command
+  else if (command == "CONF"){
+    downlink = true;
+    reply = "CONF";
+    if (armed == true){
+      digitalWrite(RLY3, HIGH); // Turn On Arming Relay
+    }
+    Serial.println("Connected");
+  }
+  else if (command == "CONT1" || command == "CONT2"){ // Continuity Check Command
+    check_cont(command);
+  }
+  else if (command == "ARM"){ // Arming Command
     digitalWrite(RLY3, HIGH); // Engage arming relay
     armed = true; // Mark system as armed
     reply = "ARMD";
   }
-  else if (cmnd == "DARM"){ // Disarming Command
+  else if (command == "DARM"){ // Disarming Command
     digitalWrite(RLY3, LOW); // Turn off Arming Relay
     armed = false;
     reply = "DARMD";
   }
-  else if (cmnd == "FIRE1" || cmnd == "FIRE2"){ // Fire Command
-    fire_rocket(cmnd);
+  else if (command == "FIRE1" || command == "FIRE2"){ // Fire Command
+    fire_rocket(command);
   }
   else { // No Command
     reply = "";
@@ -147,48 +166,33 @@ void command_actions(String cmnd){
 }
 
 void recieve_data(){
-  Serial.println(HC12.available());
   while (HC12.available()){ // If data available from Remote
     incomingByte = HC12.read(); // Read command
     command += char(incomingByte); // Update command with incoming byte
   }
 
-  if (command != ""){
-    Serial.println(command); // Debug line
+  if (command == ""){ // If no reply recieved
+    disconnect_counter++; // Increment reply counter
+  }
+  else{
+    disconnect_counter = 0; // Reset counter
   }
 }
 
 void send_data(){
-  if (reply != ""){ // If ready to send reply
-    HC12.print(reply); // Send reply to remote
-    Serial.println(reply); // Debug line
+  if (reply != ""){ // If ready to send command
+    HC12.print(reply);
   }
 
   while (Serial.available()) { // If Serial Line is being used
-    HC12.write(Serial.read()); // Send replies from Serial Line
-    Serial.println("test");
+    HC12.write(Serial.read()); // Send commands from Serial Line
   }
 }
 
 void comm_controller(){
   recieve_data();
-  send_data();
-
   delay(comm_delay); // Wait long enough for controller to recieve communciation
-}
 
-void get_downlink(){
-  while (downlink == false){
-    reply = "SHAKE";
-    comm_controller();
-    
-    if (command == "HAND"){
-      downlink = true;
-    }
-
-    command = ""; // Reset command to empty.
-    reply = ""; // Reset reply to empty
-  }
-
-  Serial.println("Connected");
+  send_data();
+  delay(comm_delay); // Wait long enough for controller to recieve communciation
 }
